@@ -196,3 +196,10 @@ cython_debug/
 data/Time-300B/
 data/Time_MoE/
 resultados/*.csv
+baseline/results
+baseline/loss-plots
+baseline/*.csv
+
+neural_odes/results
+neural_odes/loss-plots
+neural_odes/*.csv
