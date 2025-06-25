@@ -95,3 +95,52 @@ def create_windows_multi(data, window_size, horizonte):
     ys = np.array(ys)
     return Xs, ys
 
+def create_intervals_moe(df):
+    fecha_min = df['Fecha'].min()
+    fecha_max = df['Fecha'].max()
+    bins = pd.date_range(start=fecha_min, end=fecha_max, periods=9)
+    df['Intervalo'] = pd.cut(df['Fecha'], bins=bins, include_lowest=True, right=False)
+    return sorted(df['Intervalo'].dropna().unique(), key=lambda x: x.left)
+
+
+def smape_chunked(y_true, y_pred, eps=1e-8, chunk_size=1_000_000):
+    """
+    Calcula SMAPE de manera eficiente por chunks para evitar usar demasiada memoria de una sola vez.
+    Args:
+        y_true (np.ndarray): Array de valores reales.
+        y_pred (np.ndarray): Array de valores predichos.
+        eps (float): Valor pequeño para evitar división por cero.
+        chunk_size (int): Número de elementos por chunk para procesar en cada iteración.
+    Retorna:
+        float: SMAPE en porcentaje.
+    """
+    # Asegurarnos de que son numpy arrays 1D y de tipo float
+    y_true = np.asarray(y_true, dtype=np.float32).flatten()
+    y_pred = np.asarray(y_pred, dtype=np.float32).flatten()
+    n = y_true.shape[0]
+    assert y_pred.shape[0] == n, f"y_true y y_pred deben tener misma longitud: {n} vs {y_pred.shape[0]}"
+    
+    total_smape = 0.0
+    count = 0
+    
+    # Procesar en chunks
+    for start in range(0, n, chunk_size):
+        end = min(start + chunk_size, n)
+        yt = y_true[start:end]
+        yp = y_pred[start:end]
+        
+        # Cálculo chunk
+        abs_diff = np.abs(yt - yp)
+        denom = np.abs(yt) + np.abs(yp)
+        
+        # Evitar división por cero: considerar solo denom > eps
+        mask = denom > eps
+        if np.any(mask):
+            smape_vals = abs_diff[mask] / (denom[mask] / 2.0)
+            total_smape += np.sum(smape_vals)
+            count += mask.sum()
+        # Para denom <= eps, se omiten (no contribuyen al sumatorio ni al count)
+    
+    if count == 0:
+        return np.nan  # No hay elementos válidos para calcular
+    return 100 * (total_smape / count)

@@ -203,3 +203,8 @@ baseline/*.csv
 neural_odes/results
 neural_odes/loss-plots
 neural_odes/*.csv
+
+time_fm/results/times_fm_results/*.csv
+full-results
+data/Models_neural
+data/Models_lstm
