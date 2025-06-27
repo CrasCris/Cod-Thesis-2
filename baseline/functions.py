@@ -144,3 +144,36 @@ def smape_chunked(y_true, y_pred, eps=1e-8, chunk_size=1_000_000):
     if count == 0:
         return np.nan  # No hay elementos válidos para calcular
     return 100 * (total_smape / count)
+
+def sample_fraction(X, y, fraction, random_state=None, min_samples=1):
+    """
+    Muestra aleatoriamente una fracción de los datos (X, y).
+    
+    Args:
+        X (np.ndarray): Array de entrada de forma (N, ..., ...), donde N es el número de muestras.
+        y (np.ndarray): Array de etiquetas de forma (N, ...) correspondiente a X.
+        fraction (float): Fracción de datos a tomar. Debe estar en (0, 1]. Por ejemplo, 0.10 para 10% o 0.03 para 3%.
+        random_state (int o None): Semilla para reproducibilidad. Si None, aleatorio.
+        min_samples (int): Número mínimo de muestras a retornar si fraction*N < min_samples. Por defecto 1.
+    
+    Retorna:
+        X_sample (np.ndarray): Subconjunto muestreado de X de tamaño aproximadamente floor(N * fraction) o al menos min_samples.
+        y_sample (np.ndarray): Subconjunto muestreado de y correspondiente.
+    """
+    X = np.asarray(X)
+    y = np.asarray(y)
+    assert X.shape[0] == y.shape[0], f"X e y deben tener el mismo número de muestras en la dimensión 0: {X.shape[0]} vs {y.shape[0]}"
+    assert 0 < fraction <= 1, f"fraction debe estar en (0, 1], se recibió: {fraction}"
+    
+    N = X.shape[0]
+    # Calcular tamaño de la muestra
+    sample_size = int(np.floor(N * fraction))
+    # Asegurar al menos min_samples si sample_size es menor
+    sample_size = max(sample_size, min_samples) if N > 0 else 0
+    sample_size = min(sample_size, N)  # no exceder N
+    
+    # Generar índices aleatorios sin reemplazo
+    rng = np.random.default_rng(random_state)
+    indices = rng.choice(N, size=sample_size, replace=False)
+    
+    return X[indices], y[indices]
