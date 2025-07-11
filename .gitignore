@@ -208,3 +208,4 @@ time_fm/results/times_fm_results/*.csv
 full-results
 data/Models_neural
 data/Models_lstm
+data/teacher_results
