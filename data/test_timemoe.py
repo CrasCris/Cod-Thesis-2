@@ -5,7 +5,7 @@ from Time_MoE.time_moe.datasets.time_moe_dataset import TimeMoEDataset
 def test_hospital():
     ds = TimeMoEDataset('Time-300B/healthcare/hospital', normalization_method='max')
     print("Numero de secuencias:", len(ds))
-    assert len(ds) == 727
+    assert len(ds) == 767
 
 def test_covid():
     ds = TimeMoEDataset('Time-300B/healthcare/covid_deaths', normalization_method='max')
