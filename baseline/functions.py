@@ -72,7 +72,7 @@ def create_windows_2(data, window_size):
 
 def smape(y_true, y_pred, eps=1e-8):
     numerator = np.abs(y_true - y_pred)
-    denominator = (np.abs(y_true) + np.abs(y_pred)) / 2.0
+    denominator = (np.abs(y_true) + np.abs(y_pred))
     return 100 * np.mean(numerator / (denominator + eps))
 
 def create_windows_multi(data, window_size, horizonte):
