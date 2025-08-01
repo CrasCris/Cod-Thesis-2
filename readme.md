@@ -1,6 +1,9 @@
 # Experimentos 
 ![experimentos](image.png)
 
+## Método propuesto KL based loss
+![KL based loss](funcion_perdida_KL.svg)
+
 ## Descripción Folders
 
 ### 1. Baseline
