@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from Time_MoE.time_moe.datasets.time_moe_dataset import TimeMoEDataset
 
 def load_data(file_path: str) -> pd.DataFrame:
     """
@@ -177,3 +178,87 @@ def sample_fraction(X, y, fraction, random_state=None, min_samples=1):
     indices = rng.choice(N, size=sample_size, replace=False)
     
     return X[indices], y[indices]
+
+def create_windows_from_sequences(sequences, window_size=15, horizon=1):
+    """
+    Dada una lista de secuencias (numpy arrays 1D), crea ventanas deslizantes:
+    - X: array de shape (num_samples, window_size, 1)
+    - y: array de shape (num_samples,)
+    Cada muestra usa window_size pasos para predecir el siguiente valor (horizon=1).
+    """
+    X_list = []
+    y_list = []
+    for seq in sequences:
+        # Asegurar numpy array
+        arr = np.array(seq).astype(float)
+        T = arr.shape[0]
+        # Solo si la longitud es mayor que window_size + horizon - 1
+        if T >= window_size + horizon:
+            for start in range(0, T - window_size - horizon + 1):
+                window = arr[start:start+window_size]
+                target = arr[start+window_size:start+window_size+horizon]
+                # Para horizon=1, target es un array de longitud 1; tomamos el escalar
+                X_list.append(window.reshape(window_size, 1))
+                y_list.append(target[0] if horizon == 1 else target)
+    if len(X_list) == 0:
+        return np.empty((0, window_size, 1)), np.empty((0,))
+    X = np.stack(X_list, axis=0)
+    y = np.array(y_list)
+
+    # Supongamos X tiene forma (N, window_size, 1), y y forma (N,)
+    mask_valid = ~np.isnan(X).any(axis=(1,2)) & ~np.isnan(y)
+    # Mantener solo muestras sin NaN:
+    X_clean = X[mask_valid]
+    y_clean = y[mask_valid]
+    print("De", X.shape[0], "muestras, quedan", X_clean.shape[0], "sin NaN")
+
+    return X_clean, y_clean
+
+def load_data_clean():
+    ds = TimeMoEDataset(data_folder='Time-300B\healthcare',normalization_method='zero')
+
+    verbose = True
+    total = len(ds)
+    valid_indices = []
+    # Iterar y filtrar
+    for i in range(total):
+        try:
+            seq = ds[i]  # seq es numpy.ndarray según comprobaste
+        except Exception as e:
+            # Si hay error al obtener la secuencia, lo avisamos y saltamos
+            if verbose:
+                print(f"Advertencia: no se pudo obtener ds[{i}]: {e}")
+            continue
+        
+        # Comprobación: si todos los valores son NaN, lo descartamos
+        # seq es numpy.ndarray; cuidado si dims especiales, pero np.isnan funcionará elementwise.
+        try:
+            if not np.all(np.isnan(seq)):
+                valid_indices.append(i)
+        except Exception as e:
+            # En caso de que seq no sea array puro, convertir primero:
+            try:
+                arr = np.array(seq)
+                if not np.all(np.isnan(arr)):
+                    valid_indices.append(i)
+            except Exception as e2:
+                if verbose:
+                    print(f"Error al verificar NaN en secuencia índice {i}: {e2}")
+                # Decidir si incluirla o no. Aquí optamos por descartarla:
+                continue
+    
+    valid_count = len(valid_indices)
+    if verbose:
+        print(f"Secuencias totales en ds: {total}")
+        print(f"Secuencias válidas (no todo NaN): {valid_count}")
+        print(f"Secuencias descartadas: {total - valid_count}")
+        sequences_validas = []
+
+    for idx in valid_indices:
+        try:
+            sequences_validas.append(ds[idx])
+        except Exception as e:
+            if verbose:
+                print(f"Error al extraer ds[{idx}] después de filtrar: {e}")
+            # Podrías decidir saltar o detener. Aquí solo saltamos.
+    return sequences_validas
