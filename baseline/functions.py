@@ -1,6 +1,16 @@
 import pandas as pd
 import numpy as np
-from Time_MoE.time_moe.datasets.time_moe_dataset import TimeMoEDataset
+# Importing custom functions
+
+import sys
+import os
+root_path = os.path.abspath(os.path.join(os.getcwd(), '..'))
+sys.path.append(root_path)
+
+from data.Time_MoE.time_moe.datasets.time_moe_dataset import TimeMoEDataset
+import torch
+from torch import nn
+from torchdiffeq import odeint
 
 def load_data(file_path: str) -> pd.DataFrame:
     """
@@ -262,3 +272,94 @@ def load_data_clean():
                 print(f"Error al extraer ds[{idx}] después de filtrar: {e}")
             # Podrías decidir saltar o detener. Aquí solo saltamos.
     return sequences_validas
+
+
+class ODEFunc(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(1, 50),
+            nn.Tanh(),
+            nn.Linear(50, 1)
+        )
+
+    def forward(self, t, x):
+        return self.net(x)
+
+class NeuralODEModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.odefunc = ODEFunc()
+    
+    def forward(self, x):
+        # x: [batch_size, seq_len, features]
+        device = x.device
+        seq_len = x.shape[1]
+        # Crear t en el dispositivo correcto
+        t = torch.linspace(0, 1, seq_len, device=device)
+        # Estado inicial para cada muestra: último valor de la secuencia
+        # Si features=1, x[:, -1, :] es [batch_size, 1]
+        y0 = x[:, -1, :]
+        # Integrar en batch: devuelve [len(t), batch_size, features]
+        out = odeint(self.odefunc, y0, t, method='rk4')
+        # Tomar el valor final en t=1 para cada muestra
+        y_final = out[-1]
+        return y_final  # forma [batch_size, features]
+    
+
+
+def create_windows_inference(data, window_size=15, horizon=1):
+    """
+    Crea ventanas deslizantes (X, y) a partir de:
+      - data: puede ser
+          * un numpy array 1D (una sola serie temporal), o
+          * una lista/iterable de numpy arrays 1D (varias series).
+    Parámetros:
+      - window_size: número de pasos de entrada por ventana X
+      - horizon: pasos a predecir (por defecto 1)
+    Devuelve:
+      - X: array de shape (num_samples, window_size, 1)
+      - y: array de shape (num_samples,) si horizon=1,
+             o (num_samples, horizon) en otro caso.
+    """
+    # Si data es un array 1D, lo convertimos en lista de una sola secuencia
+    if isinstance(data, np.ndarray) and data.ndim == 1:
+        sequences = [data]
+    else:
+        # Asumimos que data es iterable de arrays 1D
+        sequences = [np.asarray(seq).astype(float) for seq in data]
+
+    X_list, y_list = [], []
+
+    for arr in sequences:
+        T = arr.shape[0]
+        # Solo procesar si hay suficiente longitud
+        if T >= window_size + horizon:
+            for start in range(T - window_size - horizon + 1):
+                window = arr[start : start + window_size]
+                target = arr[start + window_size : start + window_size + horizon]
+                X_list.append(window.reshape(window_size, 1))
+                # Si horizon=1 devolvemos escalar, si no, el vector entero
+                y_list.append(target[0] if horizon == 1 else target)
+
+    # Si no se creó ninguna muestra, devolvemos arrays vacíos con las formas correctas
+    if not X_list:
+        X = np.empty((0, window_size, 1))
+        y = np.empty((0,)) if horizon == 1 else np.empty((0, horizon))
+        return X, y
+
+    X = np.stack(X_list, axis=0)
+    y = np.array(y_list)
+
+    # Filtrar muestras que contengan NaN en X o en y
+    mask_valid = ~np.isnan(X).any(axis=(1,2))
+    if horizon == 1:
+        mask_valid &= ~np.isnan(y)
+    else:
+        mask_valid &= ~np.isnan(y).any(axis=1)
+
+    X_clean = X[mask_valid]
+    y_clean = y[mask_valid]
+
+    print(f"De {X.shape[0]} muestras, quedan {X_clean.shape[0]} sin NaN")
+    return X_clean, y_clean

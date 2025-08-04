@@ -71,18 +71,6 @@ def download_time300b():
         print("Error durante la descarga:")
         print(result.stderr)
 
-def download_covid():
-    try:
-        client = Socrata("www.datos.gov.co", "luRJKqXsnIq0s5L8vJLcReh5l")
-        results = client.get("gt2j-8ykr", limit=6400000) #6400000
-        clean_data_covid(pd.DataFrame.from_records(results))
-        print("Datos de COVID-19 descargados y proce" \
-        "sados exitosamente.")
-    
-    except Exception as e:
-        print(f"Error al descargar los datos: {e}")
-
 
 if __name__ == "__main__":
     download_time300b()
-    download_covid()

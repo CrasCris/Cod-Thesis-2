@@ -210,3 +210,6 @@ data/Models_neural
 data/Models_lstm
 data/teacher_results
 test
+data/covid_19.csv
+data/serie_completa.csv
+data/serie.csv

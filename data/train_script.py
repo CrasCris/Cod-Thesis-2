@@ -1,6 +1,8 @@
 # Get costume functions 
 
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'   # 0 = todos, 1 = INFO y superior, 2 = WARNING+, 3 = ERROR+
+
 import sys
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, BASE_DIR)
@@ -18,6 +20,12 @@ import csv
 import numpy as np    
 import tensorflow as tf
 from tensorflow.keras import Model
+
+import torch.optim as optim
+from torchdiffeq import odeint
+import torch
+import torch.nn as nn
+
 
 def validate_data():
     test = os.path.isdir("Time-300B")
@@ -359,8 +367,292 @@ def training_LSTM():
     print("Training completed successfully. Models saved in 'Models_lstm' directory.")
 
 
-
 def train_Neural():
     """ Train Neural Network models 100% - 10% - 3% - 3% distilled
     """
+
+    os.makedirs('Models_neural', exist_ok=True)
+    # Define the neural network model
+    # Neural ODE Model
+    class ODEFunc(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Linear(1, 50),
+                nn.Tanh(),
+                nn.Linear(50, 1)
+            )
+
+        def forward(self, t, x):
+            return self.net(x)
+
+    class NeuralODEModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.odefunc = ODEFunc()
+        
+        def forward(self, x):
+            # x: [batch_size, seq_len, features]
+            device = x.device
+            seq_len = x.shape[1]
+            # Crear t en el dispositivo correcto
+            t = torch.linspace(0, 1, seq_len, device=device)
+            # Estado inicial para cada muestra: último valor de la secuencia
+            # Si features=1, x[:, -1, :] es [batch_size, 1]
+            y0 = x[:, -1, :]
+            # Integrar en batch: devuelve [len(t), batch_size, features]
+            out = odeint(self.odefunc, y0, t, method='rk4')
+            # Tomar el valor final en t=1 para cada muestra
+            y_final = out[-1]
+            return y_final  # forma [batch_size, features]
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+
+    def train_model(model, X_train, y_train, X_test, y_test, batch_size=64, epochs=20):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        train_dataset = torch.utils.data.TensorDataset(
+            torch.tensor(X_train, dtype=torch.float32),
+            torch.tensor(y_train, dtype=torch.float32)
+        )
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+        model = model.to(device)
+        criterion = nn.MSELoss()
+        optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+        loss_vals = []
+        for epoch in range(epochs):
+            model.train()
+            epoch_loss = 0.0
+            for xb, yb in train_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                optimizer.zero_grad()
+                output = model(xb)
+                loss = criterion(output, yb)
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item() * xb.size(0)
+            epoch_loss /= len(train_loader.dataset)
+            loss_vals.append(epoch_loss)
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss:.4f}")
+
+        best_epoch = int(np.argmin(loss_vals)) + 1
+        best_loss = loss_vals[best_epoch - 1]
+        print(f"Mejor época = {best_epoch}, Loss = {best_loss:.4f}")
+
+        # Evaluación
+        model.eval()
+        with torch.no_grad():
+            X_test_tensor = torch.tensor(X_test, dtype=torch.float32).to(device)
+            y_test_tensor = torch.tensor(y_test, dtype=torch.float32).to(device)
+            y_pred = model(X_test_tensor).cpu().numpy()
+
+        y_test_inv = y_test_tensor.cpu().numpy().reshape(-1, 1)
+        mae = mean_absolute_error(y_test_inv, y_pred)
+        mse = mean_squared_error(y_test_inv, y_pred)
+        smape_value = smape(y_test_inv, y_pred)
+        print(f"MAE: {mae:.4f}, MSE: {mse:.4f}, sMAPE: {smape_value:.4f}")
+
+        return model, loss_vals
+    
+    ds = load_data_clean()
+    X, y = create_windows_from_sequences(ds, window_size=15, horizon=1)
+
+    # Training for 100% 
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=True, random_state=42)
+    model = NeuralODEModel()
+    trained_model, loss_vals = train_model(model, X_train, y_train, X_test, y_test)
+
+    # metrics
+    y_pred = trained_model(torch.tensor(X_test, dtype=torch.float32).to(device)).cpu().detach().numpy().flatten()
+    mae = mean_absolute_error(y_test, y_pred)
+    mse = mean_squared_error(y_test, y_pred)
+    smape_value = smape(y_test, y_pred)
+
+    print("Metrics for LSTM 100% Model:")
+    print("MAE:", mae)
+    print("MSE:", mse)
+    print("SMAPE:", smape_value)
+    
+    torch.save(trained_model.state_dict(), "Models_neural/modelo_100.pth")
+
+    # Training for 10%
+    X_10, y_10 = sample_fraction(X, y, 0.10, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X_10, y_10, test_size=0.2, shuffle=True, random_state=42)
+    model = NeuralODEModel()
+    trained_model, loss_vals = train_model(model, X_train, y_train, X_test, y_test)
+
+    # metrics
+    y_pred = trained_model(torch.tensor(X_test, dtype=torch.float32).to(device)).cpu().detach().numpy().flatten()
+    mae = mean_absolute_error(y_test, y_pred)
+    mse = mean_squared_error(y_test, y_pred)
+    smape_value = smape(y_test, y_pred)
+
+    print("Metrics for LSTM 10% Model:")
+    print("MAE:", mae)
+    print("MSE:", mse)
+    print("SMAPE:", smape_value)
+    
+    torch.save(trained_model.state_dict(), "Models_neural/modelo_10.pth")
+
+    # Training for 3%   
+    X_3, y_3 = sample_fraction(X, y, 0.03, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X_3, y_3, test_size=0.2, shuffle=True, random_state=42)
+    model = NeuralODEModel()
+    trained_model, loss_vals = train_model(model, X_train, y_train, X_test, y_test)
+
+    # metrics
+    y_pred = trained_model(torch.tensor(X_test, dtype=torch.float32).to(device)).cpu().detach().numpy().flatten()
+    mae = mean_absolute_error(y_test, y_pred)
+    mse = mean_squared_error(y_test, y_pred)
+    smape_value = smape(y_test, y_pred)
+
+    print("Metrics for LSTM 3% Model:") 
+    print("MAE:", mae)
+    print("MSE:", mse)
+    print("SMAPE:", smape_value)
+
+    torch.save(trained_model.state_dict(), "Models_neural/modelo_3.pth")
+    # Training for 3% distilled
+    X_train, X_test, y_train, y_test = train_test_split(X_3, y_3, test_size=0.2, shuffle=True, random_state=42)
+
+
+    # Load teacher predictions
+    import csv
+
+    # Leer validación
+    r_t_val = []
+    with open('teacher_results/val_teacher.csv', newline='') as archivo:
+        lector = csv.reader(archivo)
+        for fila in lector:
+            # Si tus datos eran numéricos, conviértelos, por ejemplo, a float:
+            fila_convertida = [float(x) for x in fila]
+            r_t_val.append(fila_convertida)
+
+    # Leer entrenamiento
+    r_t_train = []
+    with open('teacher_results/train_teacher.csv', newline='') as archivo:
+        lector = csv.reader(archivo)
+        for fila in lector:
+            fila_convertida = [float(x) for x in fila]
+            r_t_train.append(fila_convertida)
+
+    class StudentODE(nn.Module):
+        def __init__(self):
+            super().__init__()
+            # tu ODE backbone
+            self.backbone = NeuralODEModel()
+            # dos salidas
+            self.head_clean   = nn.Linear(1, 1)    # Rs
+            self.head_distill = nn.Linear(1, 1)    # Rd
+
+        def forward(self, x):
+            # x: [batch, seq_len, feat=1]
+            h = self.backbone(x)                   # [batch,1]
+            Rs = self.head_clean(h)                # [batch,1]
+            Rd = self.head_distill(h)              # [batch,1]
+            return Rs, Rd
+    
+    def train_student_ode(
+        model, X_train, y_train, r_t_train,
+        X_val,   y_val,   r_t_val,
+        batch_size=64, epochs=20, lr=0.001
+    ):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model  = model.to(device)
+
+        # DataLoaders que entregan (Xb, tb, rtb)
+        train_ds = torch.utils.data.TensorDataset(
+            torch.tensor(X_train, dtype=torch.float32),
+            torch.tensor(y_train.reshape(-1,1), dtype=torch.float32),
+            torch.tensor(r_t_train,    dtype=torch.float32)
+        )
+        val_ds = torch.utils.data.TensorDataset(
+            torch.tensor(X_val, dtype=torch.float32),
+            torch.tensor(y_val.reshape(-1,1), dtype=torch.float32),
+            torch.tensor(r_t_val,    dtype=torch.float32)
+        )
+        train_loader = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+        val_loader   = torch.utils.data.DataLoader(val_ds,   batch_size=batch_size)
+
+        optimizer = optim.Adam(model.parameters(), lr=lr)
+
+        # Pre‑calcula epsilon con clamp para no obtener nan
+        # 1) Calcula xi
+        xi  = y_train.reshape(-1,1) - r_t_train
+
+        mad   = np.median(np.abs(xi - np.median(xi)))
+        sigma = 1.4826 * mad
+
+        # 2) elige tu alpha
+        alpha = 1.0
+
+        # 3) evita nan clippeando el ratio a <1
+        ratio = alpha / (np.sqrt(2*np.pi) * sigma)
+        ratio = min(ratio, 1 - 1e-6)
+
+        # 4) calcula epsilon sin miedo a nan
+        epsilon = sigma * np.sqrt(-2.0 * np.log(ratio))
+
+        for epoch in range(1, epochs+1):
+            model.train()
+            tot_loss = 0.0
+
+            for Xb, tb, rtb in train_loader:
+                Xb, tb, rtb = Xb.to(device), tb.to(device), rtb.to(device)
+                optimizer.zero_grad()
+
+                Rs, Rd = model(Xb)  # ambas de shape (B,1)
+
+                # TOR loss:
+                err      = torch.abs(tb - rtb)
+                loss_c   = (Rs - tb).pow(2)
+                loss_o   = torch.sqrt((Rs - rtb).pow(2) + 1e-6)
+                L_tor    = torch.where(err < epsilon, loss_c, loss_o).mean()
+
+                # Distillation loss (L1):
+                L_dist   = torch.abs(Rd - rtb).mean()
+
+                loss = L_tor + L_dist
+                loss.backward()
+                optimizer.step()
+                tot_loss += loss.item() * Xb.size(0)
+
+
+
+            tot_loss /= len(train_ds)
+            print(f"Epoch {epoch}/{epochs} — Train Loss: {tot_loss:.4f}")
+        return model
+
+    student = StudentODE()
+
+    student_trained = train_student_ode(
+        student,
+        X_train, y_train, r_t_train,
+        X_test,   y_test,   r_t_val,
+        batch_size=64,
+        epochs=20,
+        lr=0.001
+    )
+
+    student.eval()
+    Rs_pred, Rd_pred = student(torch.tensor(X_test, dtype=torch.float32).to(device))
+    # Rd_pred es tu salida distill, compárala con y_val:
+    results =  Rd_pred.cpu().detach().numpy().flatten()
+
+    # metrics
+
+    mae = mean_absolute_error(y_test, results)
+    mse = mean_squared_error(y_test, results)
+    smape_value = smape(y_test, results)
+
+    print("Metrics for LSTM 3% Model:") 
+    print("MAE:", mae)
+    print("MSE:", mse)
+    print("SMAPE:", smape_value)
+    torch.save(student.state_dict(), "Models_neural/modelo_3_dest.pth")
+
     return True

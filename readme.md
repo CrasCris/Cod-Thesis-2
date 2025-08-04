@@ -21,3 +21,7 @@ De manera similar al primer folder contiene el entrenamiento para la arquitectur
 ### 4. Resultados
 
 Contiene un notebook con los resultados preliminares de los modelos base además del modelo Teacher
+
+### 5. Dataset Covid-19 Colombia
+
+[link](https://drive.google.com/file/d/1xzLJaZhnl95UFijZLBkQuTgaCnCDTyRQ/view?usp=sharing)
