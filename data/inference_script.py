@@ -243,6 +243,173 @@ def load_fundational_models():
     model.eval()
     return model
 
+
+def load_new_neural():
+
+    checkpoint = torch.load("data/Models_neural/modelo_3_dest_kl.pth", map_location="cpu")
+
+    new_state_dict = {}
+    for k, v in checkpoint.items():
+        if k.startswith("backbone.odefunc."):
+            # elimino el prefijo "backbone."
+            new_key = k.replace("backbone.", "")
+            new_state_dict[new_key] = v
+
+
+    ode_model = NeuralODEModel()    
+    missing, unexpected = ode_model.load_state_dict(checkpoint, strict=False)
+    ode_model.eval()
+
+
+    return ode_model
+
+
+def load_new_LSTM():
+    @tf.keras.utils.register_keras_serializable(package="CustomModels")
+    class Student_KL(Model):
+        def __init__(
+            self,
+            window_size: int,
+            n_features: int,
+            lstm_units: int,
+            c_kl: float = 1.0,      # ahora pondera la KL
+            eps_sigma: float = 1e-6, # para evitar nan en sigma
+            **kwargs
+        ):
+            super().__init__(**kwargs)
+            self.window_size = window_size
+            self.n_features  = n_features
+            self.lstm_units  = lstm_units
+            self.c_kl        = c_kl
+            self.eps_sigma   = eps_sigma  # para evitar nan en sigma
+            # métricas
+            self.tor_metric  = tf.keras.metrics.Mean(name="tor_loss")
+            self.kl_metric   = tf.keras.metrics.Mean(name="kl_loss")
+
+            # capas
+            self.lstm = LSTM(lstm_units, input_shape=(window_size, n_features), name="lstm_layer")
+            self.dense_clean   = Dense(1, name="clean_output")    # Rs
+            self.dense_teacher = Dense(1, name="teacher_output")  # Rd (opcional usarla)
+
+        def call(self, inputs, training=False):
+            x = self.lstm(inputs)
+            return self.dense_clean(x), self.dense_teacher(x)
+
+
+        # ---------- KL entre normales (tensors TF) ----------
+        def kl_normals_tf(self, mu0, sigma0, mu1, sigma1):
+            # sigma0, sigma1 scalars > 0
+            sigma0 = tf.maximum(sigma0, self.eps_sigma)
+            sigma1 = tf.maximum(sigma1, self.eps_sigma)
+
+            log_term = tf.math.log(sigma1 / sigma0)
+            frac = (sigma0 ** 2 + (mu0 - mu1) ** 2) / (2.0 * sigma1 ** 2)
+            kl = log_term + frac - 0.5
+            return kl
+
+        def compute_tor_loss(self, t, r_t_gt, Rs, epsilon):
+            err = tf.abs(t - r_t_gt)
+            clean_loss   = tf.square(Rs - t)
+            outlier_loss = tf.sqrt(tf.square(Rs - r_t_gt) + 1e-6)
+            return tf.where(err < epsilon, clean_loss, outlier_loss)
+
+        # ---------- train_step (usa KL en lugar de L1 para distill) ----------
+        def train_step(self, data):
+            x, y = data
+            t      = y[:, 0:1]   # etiqueta real (N,1)
+            r_t_gt = y[:, 1:2]   # pred teacher (N,1)
+
+            # estimar epsilon (del batch)
+            with tf.GradientTape() as tape:
+                Rs, Rd = self(x, training=True)            # (N,1), (N,1)
+                
+                # KL between residual distributions
+                resid_student = tf.reshape(Rs - t, [-1])   # (N,)
+                resid_teacher = tf.reshape(r_t_gt - t, [-1])
+
+                mu0 = tf.reduce_mean(resid_student)
+                mu1 = tf.reduce_mean(resid_teacher)
+                sigma0 = tf.math.reduce_std(resid_student)   # population std
+                sigma1 = tf.math.reduce_std(resid_teacher)
+
+                L_kl = self.kl_normals_tf(mu0, sigma0, mu1, sigma1)
+                # opcional: tomar mean si L_kl fuera vector (aquí es escalar)
+
+                #loss = self.c_tor * L_tor + self.c_kl * L_kl
+                loss =  self.c_kl * L_kl
+
+
+            grads = tape.gradient(loss, self.trainable_variables)
+            self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
+
+            # actualizar métricas
+            self.compiled_metrics.update_state(t, Rs)
+            self.kl_metric.update_state(L_kl)
+
+            out = {
+                "loss": loss,
+                "tor_loss": self.tor_metric.result(),
+                "kl_loss": self.kl_metric.result(),
+            }
+            for m in self.metrics:
+                out[m.name] = m.result()
+            return out
+
+        def test_step(self, data):
+            x, y = data
+            t      = y[:, 0:1]
+            r_t_gt = y[:, 1:2]
+            
+
+            Rs, Rd = self(x, training=False)
+
+            resid_student = tf.reshape(Rs - t, [-1])
+            resid_teacher = tf.reshape(r_t_gt - t, [-1])
+            mu0 = tf.reduce_mean(resid_student)
+            mu1 = tf.reduce_mean(resid_teacher)
+            sigma0 = tf.math.reduce_std(resid_student)
+            sigma1 = tf.math.reduce_std(resid_teacher)
+            L_kl = self.kl_normals_tf(mu0, sigma0, mu1, sigma1)
+
+            loss = self.c_kl * L_kl
+
+            self.compiled_metrics.update_state(t, Rs)
+            return {
+                "loss": loss,
+                "kl_loss": L_kl,
+                **{m.name: m.result() for m in self.metrics}
+            }
+
+        def get_config(self):
+            base_config = super().get_config()
+            return {
+                **base_config,
+                "window_size": self.window_size,
+                "n_features":  self.n_features,
+                "lstm_units":  self.lstm_units,
+                "c_kl":        self.c_kl,
+                "eps_sigma":   self.eps_sigma,
+            }
+
+        @classmethod
+        def from_config(cls, config):
+            return cls(
+                window_size=config.pop("window_size"),
+                n_features=config.pop("n_features"),
+                lstm_units=config.pop("lstm_units"),
+                c_kl=config.pop("c_kl", 1.0),
+                eps_sigma=config.pop("eps_sigma", 1e-6),
+                **config
+            )
+
+    lstm_model = tf.keras.models.load_model(
+        "data/Models_lstm/lstm_healthcare_model_3_distillated_kl.keras",
+        compile=False
+    )
+
+    return lstm_model
+
+
 def main():
 
     # cities to analyze
@@ -287,8 +454,8 @@ def main():
 
 
         # LSTM predictions
-        _, Rd_output = lstm_d(X)
-        pred_ld= Rd_output.cpu().numpy().flatten()
+        Rs_output, Rd_output = lstm_d(X)
+        pred_ld= Rs_output.cpu().numpy().flatten()
         
         output_lstm = lstm_n.predict(X)
         pred_ln = output_lstm.flatten() 
@@ -383,5 +550,24 @@ def main():
     print(f"Saved results in {output_path}")
 
 
-if __name__ == '__main__':
-    main()
+def main_new():
+
+    # cities to analyze
+
+    cities = {'CALI':False,
+            'BOGOTA':False,
+            'MEDELLIN':False,
+            'SANTANDER':True,
+            'ANTIOQUIA':True,
+            'VALLE':True,
+            'BOYACA':True,
+            'CUNDINAMARCA':True}
+
+    # Loading data
+    data = pd.read_csv('data/covid_19.csv', low_memory=False)
+
+    # Loading models
+    neural_dkl = load_new_neural()
+
+    lstm_kl = load_new_LSTM()
+    

@@ -306,7 +306,7 @@ class NeuralODEModel(nn.Module):
         y_final = out[-1]
         return y_final  # forma [batch_size, features]
     
-
+    
 
 def create_windows_inference(data, window_size=15, horizon=1):
     """
