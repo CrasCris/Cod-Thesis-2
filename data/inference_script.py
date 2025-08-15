@@ -570,4 +570,56 @@ def main_new():
     neural_dkl = load_new_neural()
 
     lstm_kl = load_new_LSTM()
+
+
+    results = []
+
+    for city, dep in cities.items():    
+
+        df = clean_data_covid(data, dep=dep, name=city,save=False)
+        serie= df['frecuencia'].values
+        X, y  = create_windows_inference(serie)
     
+        # NeuralODE predictions
+        x_neural = torch.tensor(X, dtype=torch.float32)
+        pred_n_kl = neural_dkl(x_neural).cpu().detach().numpy().flatten()
+
+        # Metrics for NeuralODE
+        smape_n_kl = smape(y, pred_n_kl)
+        mse_n_kl = mean_squared_error(y, pred_n_kl)
+        mae_n_kl = mean_absolute_error(y, pred_n_kl)
+
+
+        # LSTM predictions
+        Rs_output, Rd_output = lstm_kl(X)
+        pred_lstm_kl= Rs_output.cpu().numpy().flatten()
+        
+        # Metrics for LSTM
+        smape_lstm_kl = smape(y, pred_lstm_kl)
+        mse_lstm_kl = mean_squared_error(y, pred_lstm_kl)
+        mae_lstm_kl = mean_absolute_error(y, pred_lstm_kl)
+
+        # add results
+        results.append({
+            'city': city,
+            'type': 'NeuralODE_kl',
+            'SMAPE': smape_n_kl,
+            'MSE': mse_n_kl,
+            'MAE': mae_n_kl
+        })
+        results.append({
+            'city': city,
+            'type': 'LSTM_kl',
+            'SMAPE': smape_lstm_kl,
+            'MSE': mse_lstm_kl,
+            'MAE': mae_lstm_kl
+        })
+        print(f"Processed {city} - Results: {results[-3:]}")
+
+    # Tras el bucle convertimos a DataFrame y volcamos a CSV
+    df_results = pd.DataFrame(results)
+    output_path = 'data/metrics_kl.csv'
+    df_results.to_csv(output_path, index=False)
+    print(f"Saved results in {output_path}")
+
+main_new()

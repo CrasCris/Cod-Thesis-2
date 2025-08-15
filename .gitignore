@@ -213,3 +213,5 @@ test
 data/covid_19.csv
 data/serie_completa.csv
 data/serie.csv
+data/metrics.csv
+data/metrics_kl.csv
