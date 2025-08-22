@@ -1466,7 +1466,7 @@ def new_train_LSTM_KL():
     sigma = 1.4826 * mad 
 
     #Añadir el calculo del mu para la estimación
-    # ----
+    # 
 
     
     student.compile(optimizer='adam', metrics=[tf.keras.metrics.MeanSquaredError(name="mse")])
